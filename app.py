@@ -34,6 +34,63 @@ def apply_saved_defaults(columns: list[str], settings: dict) -> tuple[Optional[s
     return selected_start, selected_end, result_column
 
 
+def render_usage_summary(usage: dict) -> None:
+    st.caption("앱 기준 오늘 사용량입니다. 같은 App Key를 다른 프로그램에서 함께 쓰는 경우 TMAP 실제 총사용량과는 다를 수 있습니다.")
+    col1, col2, col3 = st.columns(3)
+    col1.metric(
+        "오늘 지오코딩",
+        f"{usage['geocoding_used']} / {usage['geocoding_limit']}",
+        delta=f"잔여 {max(usage['geocoding_limit'] - usage['geocoding_used'], 0)}",
+    )
+    col2.metric(
+        "오늘 경로안내",
+        f"{usage['routing_used']} / {usage['routing_limit']}",
+        delta=f"잔여 {max(usage['routing_limit'] - usage['routing_used'], 0)}",
+    )
+    key_status = "설정됨" if settings_service.load().get("tmap_app_key", "").strip() else "미설정"
+    col3.metric("TMAP 키 상태", key_status)
+
+
+def render_sidebar(settings: dict) -> None:
+    with st.sidebar:
+        st.header("설정")
+        st.caption("자주 바꾸지 않는 설정은 사이드바에서 관리합니다.")
+
+        st.subheader("기본 열 설정")
+        st.write(
+            f"출발지: `{settings['default_start_column']}`\n\n"
+            f"도착지: `{settings['default_end_column']}`\n\n"
+            f"결과: `{settings['default_result_column']}`"
+        )
+
+        st.subheader("TMAP API 설정")
+        saved_key = settings.get("tmap_app_key", "")
+        if saved_key.strip():
+            masked_key = f"{saved_key[:4]}{'*' * max(len(saved_key) - 8, 0)}{saved_key[-4:]}" if len(saved_key) >= 8 else "저장됨"
+            st.info(f"현재 저장된 키: {masked_key}")
+        else:
+            st.warning("현재 저장된 TMAP App Key가 없습니다.")
+
+        with st.form("tmap_key_form"):
+            entered_key = st.text_input(
+                "TMAP App Key 변경",
+                value=saved_key,
+                type="password",
+                help="새 키를 입력하고 저장하면 이후 호출부터 바로 반영됩니다.",
+            )
+            save_clicked = st.form_submit_button("TMAP 키 저장", use_container_width=True)
+
+        if save_clicked:
+            settings_service.save({"tmap_app_key": entered_key.strip()})
+            st.success("TMAP App Key를 저장했습니다. 이후 호출부터 새 키를 사용합니다.")
+            st.rerun()
+
+        if st.button("저장된 키 삭제", use_container_width=True):
+            settings_service.save({"tmap_app_key": ""})
+            st.success("저장된 TMAP App Key를 삭제했습니다.")
+            st.rerun()
+
+
 def calculate_single_distance(start_address: str, end_address: str) -> None:
     if not start_address.strip() or not end_address.strip():
         st.warning("출발지와 도착지 주소를 모두 입력해 주세요.")
@@ -53,6 +110,7 @@ def calculate_single_distance(start_address: str, end_address: str) -> None:
     if result.duration_minutes is not None:
         col2.metric("예상 도보 시간", f"{result.duration_minutes:.0f} 분")
 
+    st.success("도보 거리 계산이 완료되었습니다.")
     st.caption("경로 계산 결과는 외부 지도 서비스 응답에 따라 달라질 수 있습니다.")
 
 
@@ -61,11 +119,12 @@ def build_result_dataframe(
     start_column: str,
     end_column: str,
     result_column: str,
-) -> tuple[pd.DataFrame, int, int]:
+) -> tuple[pd.DataFrame, int, int, pd.DataFrame]:
     output_df = dataframe.copy()
     success_count = 0
     failure_count = 0
     result_values: list[object] = []
+    failure_records: list[dict] = []
     settings = settings_service.load()
     distance_service = build_distance_service(settings)
 
@@ -77,16 +136,34 @@ def build_result_dataframe(
         end_address = row[end_column]
 
         if pd.isna(start_address) or pd.isna(end_address):
-            result_values.append("주소 누락")
+            message = "주소 누락"
+            result_values.append(message)
             failure_count += 1
+            failure_records.append(
+                {
+                    "행 번호": index + 1,
+                    "출발지": start_address,
+                    "도착지": end_address,
+                    "오류": message,
+                }
+            )
         else:
             try:
                 result = distance_service.get_walking_distance(str(start_address), str(end_address))
                 result_values.append(round(result.distance_km, 3))
                 success_count += 1
             except DistanceLookupError as exc:
-                result_values.append(f"실패: {exc}")
+                message = f"실패: {exc}"
+                result_values.append(message)
                 failure_count += 1
+                failure_records.append(
+                    {
+                        "행 번호": index + 1,
+                        "출발지": start_address,
+                        "도착지": end_address,
+                        "오류": str(exc),
+                    }
+                )
 
         if total_rows > 0:
             progress_bar.progress(index / total_rows, text=f"{index}/{total_rows} 행 처리 중")
@@ -94,20 +171,26 @@ def build_result_dataframe(
     output_df[result_column] = result_values
     progress_bar.empty()
 
-    return output_df, success_count, failure_count
+    failure_df = pd.DataFrame(failure_records)
+    return output_df, success_count, failure_count, failure_df
 
 
 def render_single_lookup_tab() -> None:
     st.subheader("단건 조회")
+    st.caption("주소 2개를 직접 입력하면 도보 거리와 예상 시간을 바로 계산합니다.")
+    st.markdown("**1. 주소 입력**")
     start_address = st.text_input("출발지 주소", placeholder="예: 서울특별시 종로구 세종대로 110")
     end_address = st.text_input("도착지 주소", placeholder="예: 서울특별시 중구 세종대로 99")
 
+    st.markdown("**2. 계산 실행**")
     if st.button("도보 거리 계산", type="primary", use_container_width=True):
         calculate_single_distance(start_address, end_address)
 
 
 def render_batch_tab(settings: dict) -> None:
     st.subheader("엑셀 일괄 처리")
+    st.caption("엑셀을 업로드하고 주소 열을 선택하면 결과 열을 추가한 파일을 다시 내려받을 수 있습니다.")
+    st.markdown("**1. 파일 업로드**")
     uploaded_file = st.file_uploader("엑셀 파일 업로드", type=["xlsx"])
 
     if uploaded_file is None:
@@ -115,8 +198,9 @@ def render_batch_tab(settings: dict) -> None:
         return
 
     dataframe = pd.read_excel(uploaded_file)
+    st.success(f"파일을 불러왔습니다. 총 {len(dataframe)}행, 컬럼 {len(dataframe.columns)}개")
     st.write("업로드 미리보기")
-    st.dataframe(dataframe.head(10), use_container_width=True)
+    st.dataframe(dataframe.head(10), use_container_width=True, hide_index=True)
 
     columns = list(dataframe.columns.astype(str))
     if not columns:
@@ -125,11 +209,16 @@ def render_batch_tab(settings: dict) -> None:
 
     default_start, default_end, default_result = apply_saved_defaults(columns, settings)
 
+    st.markdown("**2. 주소 열과 결과 열 선택**")
     start_index = columns.index(default_start) if default_start else 0
     end_index = columns.index(default_end) if default_end else min(1, len(columns) - 1)
 
-    start_column = st.selectbox("출발지 주소 열", options=columns, index=start_index)
-    end_column = st.selectbox("도착지 주소 열", options=columns, index=end_index)
+    selection_col1, selection_col2 = st.columns(2)
+    start_column = selection_col1.selectbox("출발지 주소 열", options=columns, index=start_index)
+    end_column = selection_col2.selectbox("도착지 주소 열", options=columns, index=end_index)
+
+    if default_start == start_column or default_end == end_column:
+        st.caption("저장된 기본 열 설정이 자동 반영되었습니다.")
 
     result_mode = st.radio(
         "결과 기록 방식",
@@ -156,23 +245,43 @@ def render_batch_tab(settings: dict) -> None:
     if right_col.button("저장된 기본값 다시 불러오기", use_container_width=True):
         st.rerun()
 
+    st.markdown("**3. 일괄 계산 실행**")
     if st.button("일괄 계산 실행", type="primary", use_container_width=True):
         if not result_column.strip():
             st.warning("결과 열 이름을 입력해 주세요.")
             return
 
         with st.spinner("엑셀 데이터를 처리하는 중입니다..."):
-            output_df, success_count, failure_count = build_result_dataframe(
+            output_df, success_count, failure_count, failure_df = build_result_dataframe(
                 dataframe=dataframe.rename(columns={col: str(col) for col in dataframe.columns}),
                 start_column=start_column,
                 end_column=end_column,
                 result_column=result_column,
             )
 
-        st.success(f"처리가 완료되었습니다. 성공 {success_count}건, 실패 {failure_count}건")
-        st.dataframe(output_df.head(20), use_container_width=True)
+        st.success("일괄 계산이 완료되었습니다.")
+        summary_col1, summary_col2, summary_col3 = st.columns(3)
+        summary_col1.metric("총 처리 건수", len(output_df))
+        summary_col2.metric("성공", success_count)
+        summary_col3.metric("실패", failure_count)
+
+        st.write("결과 미리보기")
+        st.dataframe(output_df.head(20), use_container_width=True, hide_index=True)
+
+        if not failure_df.empty:
+            st.warning("실패한 행이 있습니다. 아래 표에서 원인을 먼저 확인해 주세요.")
+            st.dataframe(failure_df, use_container_width=True, hide_index=True)
+            failure_bytes = dataframe_to_excel_bytes(failure_df)
+            st.download_button(
+                label="실패 행만 엑셀 다운로드",
+                data=failure_bytes,
+                file_name="walking_distance_failures.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+            )
 
         output_bytes = dataframe_to_excel_bytes(output_df)
+        st.markdown("**4. 결과 파일 다운로드**")
         st.download_button(
             label="결과 엑셀 다운로드",
             data=output_bytes,
@@ -198,64 +307,17 @@ def main() -> None:
     st.caption("직접 입력 또는 엑셀 업로드 방식으로 두 주소 사이의 도보 이동거리(km)를 계산합니다.")
 
     settings = settings_service.load()
+    usage = usage_service.today_usage()
 
-    with st.expander("기본 열 설정", expanded=False):
-        st.write(
-            f"현재 기본값: 출발지 열 `{settings['default_start_column']}`, "
-            f"도착지 열 `{settings['default_end_column']}`, "
-            f"결과 열 `{settings['default_result_column']}`"
-        )
-        st.caption("엑셀 업로드 후 선택한 열 구성을 저장하면 다음 작업 때 자동으로 기본값이 반영됩니다.")
-
-    with st.expander("TMAP API 설정", expanded=False):
-        saved_key = settings.get("tmap_app_key", "")
-        st.write("TMAP 보행자 경로 API를 사용합니다.")
-        st.caption("환경 변수 `TMAP_APP_KEY`가 있으면 그 값이 우선 사용되고, 없으면 아래 저장값을 사용합니다.")
-        if saved_key.strip():
-            masked_key = f"{saved_key[:4]}{'*' * max(len(saved_key) - 8, 0)}{saved_key[-4:]}" if len(saved_key) >= 8 else "저장됨"
-            st.info(f"현재 저장된 키: {masked_key}")
-        else:
-            st.warning("현재 저장된 TMAP App Key가 없습니다.")
-
-        with st.form("tmap_key_form"):
-            entered_key = st.text_input(
-                "TMAP App Key 변경",
-                value=saved_key,
-                type="password",
-                help="새 키를 입력하고 저장하면 이후 호출부터 바로 반영됩니다.",
-            )
-            save_clicked = st.form_submit_button("TMAP 키 저장", use_container_width=True)
-
-        if save_clicked:
-            settings_service.save({"tmap_app_key": entered_key.strip()})
-            st.success("TMAP App Key를 저장했습니다. 이후 호출부터 새 키를 사용합니다.")
-            st.rerun()
-
-        if st.button("저장된 키 삭제", use_container_width=True):
-            settings_service.save({"tmap_app_key": ""})
-            st.success("저장된 TMAP App Key를 삭제했습니다.")
-            st.rerun()
+    render_sidebar(settings)
+    render_usage_summary(usage)
+    st.divider()
 
     single_tab, batch_tab = st.tabs(["단건 조회", "엑셀 일괄 처리"])
     with single_tab:
         render_single_lookup_tab()
     with batch_tab:
         render_batch_tab(settings)
-
-    usage = usage_service.today_usage()
-    st.divider()
-    st.caption("앱 기준 오늘 사용량입니다. 같은 App Key를 다른 프로그램에서 함께 쓰는 경우 TMAP 실제 총사용량과는 다를 수 있습니다.")
-    usage_col1, usage_col2 = st.columns(2)
-    usage_col1.metric(
-        "오늘 지오코딩 사용량",
-        f"{usage['geocoding_used']} / {usage['geocoding_limit']}",
-        delta=f"잔여 {max(usage['geocoding_limit'] - usage['geocoding_used'], 0)}",
-    )
-    usage_col2.metric(
-        "오늘 경로안내 사용량",
-        f"{usage['routing_used']} / {usage['routing_limit']}",
-        delta=f"잔여 {max(usage['routing_limit'] - usage['routing_used'], 0)}",
-    )
 
 
 if __name__ == "__main__":
