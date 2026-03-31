@@ -36,7 +36,7 @@ def apply_saved_defaults(columns: list[str], settings: dict) -> tuple[Optional[s
 
 def render_usage_summary(usage: dict) -> None:
     st.caption("앱 기준 오늘 사용량입니다. 같은 App Key를 다른 프로그램에서 함께 쓰는 경우 TMAP 실제 총사용량과는 다를 수 있습니다.")
-    col1, col2, col3 = st.columns(3)
+    col1, col2 = st.columns(2)
     col1.metric(
         "오늘 지오코딩",
         f"{usage['geocoding_used']} / {usage['geocoding_limit']}",
@@ -47,8 +47,6 @@ def render_usage_summary(usage: dict) -> None:
         f"{usage['routing_used']} / {usage['routing_limit']}",
         delta=f"잔여 {max(usage['routing_limit'] - usage['routing_used'], 0)}",
     )
-    key_status = "설정됨" if settings_service.load().get("tmap_app_key", "").strip() else "미설정"
-    col3.metric("TMAP 키 상태", key_status)
 
 
 def render_sidebar(settings: dict) -> None:
@@ -89,6 +87,11 @@ def render_sidebar(settings: dict) -> None:
             settings_service.save({"tmap_app_key": ""})
             st.success("저장된 TMAP App Key를 삭제했습니다.")
             st.rerun()
+
+        st.divider()
+        st.subheader("지도 바로가기")
+        st.markdown("[네이버지도 열기](https://map.naver.com/)")
+        st.markdown("[카카오맵 열기](https://map.kakao.com/)")
 
 
 def calculate_single_distance(start_address: str, end_address: str) -> None:
@@ -312,11 +315,19 @@ def main() -> None:
     render_sidebar(settings)
     render_usage_summary(usage)
     st.divider()
+    st.markdown("### 작업 모드 선택")
+    selected_mode = st.radio(
+        "작업 모드",
+        options=["단건 조회", "엑셀 일괄 처리"],
+        horizontal=True,
+        label_visibility="collapsed",
+    )
 
-    single_tab, batch_tab = st.tabs(["단건 조회", "엑셀 일괄 처리"])
-    with single_tab:
+    if selected_mode == "단건 조회":
+        st.info("빠르게 주소 2개를 넣고 즉시 거리 결과를 확인합니다.")
         render_single_lookup_tab()
-    with batch_tab:
+    else:
+        st.info("엑셀 파일을 업로드해서 여러 건의 도보 거리를 한 번에 계산합니다.")
         render_batch_tab(settings)
 
 
