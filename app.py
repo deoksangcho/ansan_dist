@@ -12,7 +12,6 @@ from services.usage_service import UsageService
 BASE_DIR = Path(__file__).resolve().parent
 SETTINGS_PATH = BASE_DIR / "config.json"
 USAGE_PATH = BASE_DIR / "usage_log.json"
-GUIDE_PDF_PATH = BASE_DIR / "TMAP_API_Key_Guide.pdf"
 settings_service = SettingsService(SETTINGS_PATH)
 usage_service = UsageService(USAGE_PATH)
 
@@ -95,14 +94,6 @@ def render_sidebar(settings: dict) -> None:
         st.subheader("지도 바로가기")
         st.markdown("[네이버지도 열기](https://map.naver.com/)")
         st.markdown("[카카오맵 열기](https://map.kakao.com/)")
-        if GUIDE_PDF_PATH.exists():
-            st.download_button(
-                label="사용방법 PDF 다운로드",
-                data=GUIDE_PDF_PATH.read_bytes(),
-                file_name="TMAP_API_Key_Guide.pdf",
-                mime="application/pdf",
-                use_container_width=True,
-            )
 
 
 def calculate_single_distance(start_address: str, end_address: str) -> None:
