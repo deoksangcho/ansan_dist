@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+.streamlit/
+.venv/
+venv/
+env/
+
+config.json
+usage_log.json
+
+*.xlsx
+!sample_addresses.xlsx

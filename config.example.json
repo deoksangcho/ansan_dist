@@ -1,0 +1,6 @@
+{
+  "default_start_column": "출발지",
+  "default_end_column": "도착지",
+  "default_result_column": "도보거리_km",
+  "tmap_app_key": ""
+}
