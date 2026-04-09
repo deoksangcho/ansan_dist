@@ -19,6 +19,25 @@ streamlit run app.py
 
 또는 `config.example.json`을 참고해서 `config.json`을 만들고 `tmap_app_key`를 넣어도 됩니다.
 
+## 데스크톱 앱 실행
+
+```powershell
+pip install -r requirements.txt
+python walkdist.py
+```
+
+데스크톱 앱은 설정 파일을 실행 폴더가 아니라 `%LOCALAPPDATA%\walkdist\` 아래에 저장합니다.
+
+## walkdist.exe 빌드
+
+```powershell
+pip install pyinstaller
+python generate_walkdist_icon.py
+.\build_walkdist.ps1
+```
+
+빌드가 완료되면 `dist\walkdist\walkdist.exe`가 생성됩니다.
+
 ## GitHub 업로드 전 체크
 
 - `config.json`은 업로드하지 마세요. API 키가 들어갈 수 있습니다.
